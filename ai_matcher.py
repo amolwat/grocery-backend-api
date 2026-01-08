@@ -1,13 +1,13 @@
 import re
 import pandas as pd
 from sentence_transformers import SentenceTransformer, util
-from transformers import pipeline
+# ❌ REMOVED: from transformers import pipeline (Not needed anymore)
 
 # ==================================================
 # 🧠 CONFIG: KNOWLEDGE BASE
 # ==================================================
 
-# 1. POSITIVE CONCEPTS (What we want)
+# 1. POSITIVE CONCEPTS
 INGREDIENT_CONCEPTS = [
     "Pork Belly", "Pork Loin", "Pork Collar", "Minced Pork", "Chicken Breast", 
     "Whole Chicken", "Beef Steak", "Salmon Fillet", "Shrimp", "Squid",
@@ -17,7 +17,7 @@ INGREDIENT_CONCEPTS = [
     "Coke", "Pepsi", "Soda"
 ]
 
-# 2. MEAT CUT RULES (The "Enforcer")
+# 2. MEAT CUT RULES
 MEAT_CUT_RULES = [
     {"triggers": ["สันคอ", "collar"], "avoid": ["สันนอก", "loin", "sirloin"]},
     {"triggers": ["สันนอก", "loin"], "avoid": ["สันคอ", "collar", "สันใน", "tenderloin"]},
@@ -31,7 +31,7 @@ LOW_QUALITY_PARTS = [
     "หัว", "กาง", "เศษ", "หนัง", "โครง", "กาก"
 ]
 
-# 4. PET FOOD TRAPS (Updated for 'Smart Heart' space issue)
+# 4. PET FOOD TRAPS
 PET_KEYWORDS = [
     "cat food", "dog food", "kitten", "puppy", "adult", "senior",
     "me-o", "whiskas", "pedigree", "smartheart", "smart heart", "nekko", 
@@ -39,26 +39,26 @@ PET_KEYWORDS = [
     "อาหารแมว", "อาหารสุนัข", "แมว", "สุนัข", "สัตว์เลี้ยง"
 ]
 
-# 5. NON-FOOD TRAPS (Toys/Dolls)
+# 5. NON-FOOD TRAPS
 NON_FOOD_TRAPS = [
     "doll", "toy", "plush", "pillow", "cushion", "shirt", "bag", "keychain", "model",
     "ตุ๊กตา", "ของเล่น", "หมอน", "เสื้อ", "กระเป๋า", "พวงกุญแจ", "โมเดล"
 ]
 
-# 6. BABY & PROCESSED FOOD TRAPS (Fixes 'Cerelac Porridge' & 'Curry')
+# 6. PROCESSED & BABY TRAPS
 PROCESSED_TRAPS = [
     # Baby Food
     "baby", "infant", "toddler", "junior", "cerelac", "peachy", 
     "porridge", "soup", "instant", "cereal", "powder", "puree",
     "เด็ก", "ทารก", "โจ๊ก", "ข้าวต้ม", "ซีรีแล็ค", "ผง", "สำเร็จรูป",
     
-    # Cooking Agents (Fixes 'Morning Glory' -> 'Flour')
-    "flour", "batter", "mix", "coating", "tempura", "breading",
+    # Cooking Agents
+    "flour", "batter", "mix", "coating", "tempura", "breading", "unclebarns",
     "แป้ง", "ชุบ", "ทอดกรอบ", "เกล็ดขนมปัง",
     
-    # Ready Meals (Fixes 'Morning Glory' -> 'Curry')
-    "curry", "meal", "box", "frozen meal", "retort",
-    "แกง", "ข้าวกล่อง", "พร้อมทาน"
+    # Ready Meals
+    "curry", "meal", "box", "frozen meal", "retort", "nugget",
+    "แกง", "ข้าวกล่อง", "พร้อมทาน", "นักเก็ต"
 ]
 
 # 7. LIQUID TRAPS
@@ -77,16 +77,17 @@ class AIModelHandler:
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
-            print("🤖 Loading AI Models...")
+            print("🤖 Loading AI Model (Vector Only)...")
+            
+            # 🚀 OPTIMIZATION: We only load ONE model now.
+            # This handles all the text understanding.
             vector_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
             
-            # Zero-Shot (Backup)
-            classifier = pipeline("zero-shot-classification", 
-                                model="valhalla/distilbart-mnli-12-3",
-                                device=-1)
+            # ❌ REMOVED: classifier = pipeline(...) 
+            # We don't need it because our "Trap Lists" do the same job 100x faster.
             
-            cls._instance = (vector_model, classifier)
-            print("✅ AI Models Loaded")
+            cls._instance = vector_model
+            print("✅ AI Model Loaded")
         return cls._instance
 
 def _norm(s: str) -> str:
@@ -98,7 +99,8 @@ def _norm(s: str) -> str:
 class SmartMatcher:
     def __init__(self, scraped_data: list):
         self.df = pd.DataFrame(scraped_data)
-        self.vector_model, self.classifier = AIModelHandler.get_instance()
+        # 🚀 Only get the vector model
+        self.vector_model = AIModelHandler.get_instance()
         self.vectors = None
 
         if not self.df.empty:
@@ -120,8 +122,7 @@ class SmartMatcher:
         # B. Non-Food Check
         if any(k in n for k in NON_FOOD_TRAPS): return True
         
-        # C. Processed/Baby Check (Fixes Porridge/Flour)
-        # If user searches "Porridge" allow it, otherwise block it.
+        # C. Processed/Baby Check
         is_processed_query = any(k in q for k in ["baby", "porridge", "soup", "flour", "curry", "โจ๊ก", "แป้ง", "แกง"])
         if not is_processed_query:
             if any(k in n for k in PROCESSED_TRAPS): return True
@@ -130,7 +131,6 @@ class SmartMatcher:
         is_liquid_query = any(k in q for k in LIQUID_KEYWORDS)
         if not is_liquid_query:
             if any(k in n for k in LIQUID_KEYWORDS):
-                # SAFE LIQUIDS
                 safe_liquids = [
                     "sauce", "oil", "milk", "tea", "coffee", "syrup", 
                     "coke", "cola", "pepsi", "est", "sprite", "fanta", "soda", 
@@ -182,9 +182,7 @@ class SmartMatcher:
     # ==================================================
     # 🚀 MAIN FINDER
     # ==================================================
-    def find_matches(self, user_query: str, threshold=0.48):
-        # ⚠️ Threshold raised to 0.48 to block "Flour" when "Morning Glory" isn't found
-        
+    def find_matches(self, user_query: str, threshold=0.55):
         if self.vectors is None or self.df.empty:
             return []
 
@@ -217,25 +215,19 @@ class SmartMatcher:
 
         df_final = pd.DataFrame(final_results)
         
-        # ⚡ NEW: SIMPLE NAME BOOST ⚡
-        # If product name is very similar to query (e.g. "Carrot" vs "Carrot"), boost it.
-        # This forces "Fresh Carrot" to beat "Carrot Porridge".
+        # ⚡ RAW INGREDIENT BOOST ⚡
         def boost_logic(row):
             s = row["score"]
             name_lower = str(row["Product Name"]).lower()
             q_lower = q.lower()
             
-            # 1. Exact or Starts With Boost (Prioritize Simple Names)
-            # If the product name starts with the query, it's likely the raw ingredient.
-            # e.g. Query "Carrot" -> Matches "Carrot Imported" (Good)
+            # 1. Exact Start Boost
             if name_lower.startswith(q_lower):
-                s += 0.15
+                s += 0.2
             
-            # 2. Length Penalty
-            # If product name is HUGE (like a full recipe name), penalize slightly
-            # unless the user typed a long query.
-            if len(name_lower) > len(q_lower) + 20:
-                s -= 0.05
+            # 2. Short Name Bonus
+            if len(name_lower) <= len(q_lower) + 15:
+                s += 0.25 
                 
             return s
             
