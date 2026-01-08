@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+sentence-transformers
+transformers
+torch
+playwright
+nest_asyncio
+beautifulsoup4
