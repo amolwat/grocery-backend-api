@@ -1,12 +1,28 @@
 import asyncio
 import random
 import re
-import gc # Garbage Collector
+import gc 
 from typing import List, Dict, Any
 from urllib.parse import quote
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async  # <--- ✅ ADDED THIS IMPORT
 from bs4 import BeautifulSoup
+
+# ==========================================
+# 🛠️ ROBUST IMPORT (The Fix)
+# ==========================================
+try:
+    # Try importing the library version
+    from playwright_stealth import stealth_async
+except ImportError:
+    print("⚠️ playwright-stealth library missing or incompatible. Using manual fallback.")
+    # Fallback: Manual Stealth if library fails
+    async def stealth_async(page):
+        # This script hides the "I am a robot" flag from the browser
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
 
 # ==========================================
 # 🔧 CONFIG & HELPERS
@@ -16,7 +32,6 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 ]
 
-# Optimize Browser Args for Low Memory
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
@@ -24,7 +39,7 @@ BROWSER_ARGS = [
     "--disable-dev-shm-usage",
     "--disable-gpu",
     "--disable-extensions",
-    "--single-process", # Helps on low-RAM envs
+    "--single-process",
     "--disable-gl-drawing"
 ]
 
@@ -100,12 +115,11 @@ def clean_product_name(name: str, price: float) -> str:
     return x[:120].strip()
 
 # ==========================================
-# 🚀 RAM-SAFE SCRAPER (The Fix)
+# 🚀 RAM-SAFE SCRAPER (Updated)
 # ==========================================
 async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
-    """
-    Scrapes retailers sequentially, cleaning RAM after each one.
-    """
+    # ... (Same scraper setup as before) ...
+    
     # 1. UNCOMMENT EVERYTHING
     retailers = [
         {
@@ -133,29 +147,22 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     print(f"🚀 RAM-SAFE Scrape Started: {q_raw}")
 
     async with async_playwright() as p:
-        # Launch Browser ONCE
         browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
         
         for shop in retailers:
             print(f"🛒 Scraping {shop['name']}...")
             
-            # --- CRITICAL: New Context for EACH Shop ---
-            # This isolates the memory. When we close it, RAM is freed.
             context = await browser.new_context(
                 user_agent=random.choice(USER_AGENTS),
-                viewport={"width": 1024, "height": 768}, # Smaller screen saves RAM
+                viewport={"width": 1024, "height": 768},
                 locale="th-TH"
             )
-            # Block images aggressively
             await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
 
             page = await context.new_page()
 
-            # ------------------------------------------------
-            # 🥷 APPLY STEALTH MODE (Bypasses BigC Blocking)
-            # ------------------------------------------------
-            await stealth_async(page)  # <--- ✅ THIS IS THE FIX
-            # ------------------------------------------------
+            # ✅ USE THE ROBUST STEALTH FUNCTION
+            await stealth_async(page)
             
             try:
                 # BigC Logic
@@ -164,14 +171,13 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                     has_thai = any("\u0E00" <= ch <= "\u0E7F" for ch in q_raw)
                     final_url = f"https://www.bigc.co.th/th/search?q={q_encoded}" if has_thai else f"https://www.bigc.co.th/en/search?q={q_encoded}"
 
-                # Strict Timeout (12s max) - If it hangs, kill it to save the server
                 try:
                     await page.goto(final_url, timeout=12000, wait_until="domcontentloaded")
                     
                     try:
                         await page.wait_for_selector(shop["selectors"]["product_card"], timeout=5000)
                     except:
-                        pass # Continue even if timeout, maybe content loaded
+                        pass 
 
                     content = await page.content()
                     soup = BeautifulSoup(content, "html.parser")
@@ -179,7 +185,7 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
 
                     count = 0
                     for card in cards:
-                        if count >= 8: break # Lower limit to 8 items per store
+                        if count >= 8: break 
                         try:
                             name_el = card.select_one(shop["selectors"]["name"])
                             if not name_el: continue
@@ -213,10 +219,9 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                 print(f"   ❌ Critical {shop['name']}: {e}")
             
             finally:
-                # --- CRITICAL: CLOSE EVERYTHING IMMEDIATELY ---
                 await page.close()
                 await context.close()
-                gc.collect() # Force Python to clean RAM
+                gc.collect() 
         
         await browser.close()
     
