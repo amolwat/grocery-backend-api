@@ -1,8 +1,8 @@
-fastapi
-uvicorn
+fastapi==0.110.0
+uvicorn==0.29.0
 pandas
 sentence-transformers
 torch
-playwright
+playwright==1.42.0
 nest_asyncio
 beautifulsoup4

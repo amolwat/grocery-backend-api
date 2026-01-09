@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-set -e
+set -o errexit
 
-echo "📦 Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-echo "🌐 Installing Playwright Chromium..."
+# ✅ IMPORTANT
 python -m playwright install chromium
-
-echo "✅ Build finished"
