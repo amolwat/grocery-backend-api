@@ -8,74 +8,25 @@ from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
 # ==========================================
-# 🥷 ADVANCED MANUAL STEALTH (The Fix)
-# ==========================================
-# Since the library is failing, we inject these scripts manually to fool Cloudflare.
-async def apply_stealth(page):
-    """
-    Manually applies advanced evasion techniques to the page
-    to bypass Cloudflare and Bot Detection.
-    """
-    await page.add_init_script("""
-        // 1. Overwrite the `navigator.webdriver` property
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined
-        });
-
-        // 2. Mock `window.chrome`
-        window.chrome = {
-            runtime: {}
-        };
-
-        // 3. Mock `navigator.permissions`
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications' ?
-            Promise.resolve({ state: 'granted', kind: 'permission' }) :
-            originalQuery(parameters)
-        );
-
-        // 4. Mock `navigator.plugins` and `navigator.mimeTypes`
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-        Object.defineProperty(navigator, 'mimeTypes', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-
-        // 5. Spoof WebGL Vendor (To look like a real Graphics Card)
-        const getParameter = WebGLRenderingContext.prototype.getParameter;
-        WebGLRenderingContext.prototype.getParameter = function(parameter) {
-            // 37445: UNMASKED_VENDOR_WEBGL
-            // 37446: UNMASKED_RENDERER_WEBGL
-            if (parameter === 37445) {
-                return 'Google Inc. (NVIDIA)';
-            }
-            if (parameter === 37446) {
-                return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1050 Ti Direct3D11 vs_5_0 ps_5_0, or similar)';
-            }
-            return getParameter(parameter);
-        };
-    """)
-
-# ==========================================
 # 🔧 CONFIG & HELPERS
 # ==========================================
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-]
+# Use a Single, Modern User-Agent (Less suspicious than random rotation on a single IP)
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+# Aggressive "Anti-Bot" Arguments
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
-    "--disable-infobars",
+    "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
+    "--disable-accelerated-2d-canvas",
+    "--no-first-run",
+    "--no-zygote",
     "--disable-gpu",
-    "--disable-extensions",
-    "--single-process", 
-    "--disable-gl-drawing",
-    "--window-size=1920,1080" # Help look like a real monitor
+    "--hide-scrollbars",
+    "--mute-audio",
+    "--ignore-certificate-errors",
+    "--window-size=1920,1080" # Force a standard desktop resolution
 ]
 
 HEADLESS = True 
@@ -153,7 +104,6 @@ def clean_product_name(name: str, price: float) -> str:
 # 🚀 RAM-SAFE SCRAPER (Updated)
 # ==========================================
 async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
-    # 1. UNCOMMENT EVERYTHING
     retailers = [
         {
             "name": "BigC",
@@ -180,23 +130,40 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     print(f"🚀 RAM-SAFE Scrape Started: {q_raw}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
+        browser = await p.chromium.launch(
+            headless=HEADLESS, 
+            args=BROWSER_ARGS
+        )
         
         for shop in retailers:
             print(f"🛒 Scraping {shop['name']}...")
             
+            # Use 'ignore_https_errors' to prevent handshake failures
             context = await browser.new_context(
-                user_agent=random.choice(USER_AGENTS),
-                viewport={"width": 1024, "height": 768},
-                locale="th-TH"
+                user_agent=USER_AGENT,
+                viewport={"width": 1920, "height": 1080},
+                locale="th-TH",
+                ignore_https_errors=True,
+                java_script_enabled=True
             )
-            # Block heavy resources
-            await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
+            
+            # IMPORTANT: Add Extra HTTP Headers to look like a real browser
+            await context.set_extra_http_headers({
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,th;q=0.8",
+                "Referer": "https://www.google.com/",
+                "Upgrade-Insecure-Requests": "1"
+            })
+
+            # Block heavy resources only (allow scripts!)
+            await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font"] else route.continue_())
 
             page = await context.new_page()
 
-            # ✅ APPLY ADVANCED STEALTH
-            await apply_stealth(page)
+            # Inject "webdriver" removal script
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            """)
             
             try:
                 # BigC Logic
@@ -205,13 +172,16 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                     has_thai = any("\u0E00" <= ch <= "\u0E7F" for ch in q_raw)
                     final_url = f"https://www.bigc.co.th/th/search?q={q_encoded}" if has_thai else f"https://www.bigc.co.th/en/search?q={q_encoded}"
 
+                # Increased Timeout for Cloudflare Challenges
                 try:
-                    await page.goto(final_url, timeout=15000, wait_until="domcontentloaded")
+                    await page.goto(final_url, timeout=20000, wait_until="domcontentloaded")
                     
+                    # Wait for selector (if it fails, page probably didn't load right)
                     try:
-                        await page.wait_for_selector(shop["selectors"]["product_card"], timeout=5000)
+                        await page.wait_for_selector(shop["selectors"]["product_card"], timeout=8000)
                     except:
-                        pass 
+                        # Fallback: Just dump HTML and try to parse anyway
+                        pass
 
                     content = await page.content()
                     soup = BeautifulSoup(content, "html.parser")
