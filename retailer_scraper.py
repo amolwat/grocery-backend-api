@@ -5,6 +5,7 @@ import gc # Garbage Collector
 from typing import List, Dict, Any
 from urllib.parse import quote
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async  # <--- ✅ ADDED THIS IMPORT
 from bs4 import BeautifulSoup
 
 # ==========================================
@@ -29,10 +30,7 @@ BROWSER_ARGS = [
 
 HEADLESS = True 
 
-# --- KEEP YOUR HELPER FUNCTIONS (clean_text, extract_price, etc.) ---
-# (Paste your existing helper functions here: clean_text, extract_price, 
-# extract_egg_quantity, normalize_unit_data, clean_product_name)
-# I will not repeat them to save space, but DO NOT DELETE THEM!
+# --- KEEP YOUR HELPER FUNCTIONS ---
 def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip() if text else ""
 
@@ -152,6 +150,12 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
             await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
 
             page = await context.new_page()
+
+            # ------------------------------------------------
+            # 🥷 APPLY STEALTH MODE (Bypasses BigC Blocking)
+            # ------------------------------------------------
+            await stealth_async(page)  # <--- ✅ THIS IS THE FIX
+            # ------------------------------------------------
             
             try:
                 # BigC Logic
@@ -218,5 +222,3 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     
     print(f"✅ Batch Scrape Complete. Found {len(all_results)} items.")
     return all_results
-
-def find_best_deals(df): return df
