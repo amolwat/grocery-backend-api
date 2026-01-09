@@ -7,4 +7,3 @@ torch
 playwright
 nest_asyncio
 beautifulsoup4
-playwright-stealth

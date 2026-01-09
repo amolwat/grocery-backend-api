@@ -8,21 +8,55 @@ from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
 # ==========================================
-# 🛠️ ROBUST IMPORT (The Fix)
+# 🥷 ADVANCED MANUAL STEALTH (The Fix)
 # ==========================================
-try:
-    # Try importing the library version
-    from playwright_stealth import stealth_async
-except ImportError:
-    print("⚠️ playwright-stealth library missing or incompatible. Using manual fallback.")
-    # Fallback: Manual Stealth if library fails
-    async def stealth_async(page):
-        # This script hides the "I am a robot" flag from the browser
-        await page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
+# Since the library is failing, we inject these scripts manually to fool Cloudflare.
+async def apply_stealth(page):
+    """
+    Manually applies advanced evasion techniques to the page
+    to bypass Cloudflare and Bot Detection.
+    """
+    await page.add_init_script("""
+        // 1. Overwrite the `navigator.webdriver` property
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+
+        // 2. Mock `window.chrome`
+        window.chrome = {
+            runtime: {}
+        };
+
+        // 3. Mock `navigator.permissions`
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+            Promise.resolve({ state: 'granted', kind: 'permission' }) :
+            originalQuery(parameters)
+        );
+
+        // 4. Mock `navigator.plugins` and `navigator.mimeTypes`
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5],
+        });
+        Object.defineProperty(navigator, 'mimeTypes', {
+            get: () => [1, 2, 3, 4, 5],
+        });
+
+        // 5. Spoof WebGL Vendor (To look like a real Graphics Card)
+        const getParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+            // 37445: UNMASKED_VENDOR_WEBGL
+            // 37446: UNMASKED_RENDERER_WEBGL
+            if (parameter === 37445) {
+                return 'Google Inc. (NVIDIA)';
+            }
+            if (parameter === 37446) {
+                return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1050 Ti Direct3D11 vs_5_0 ps_5_0, or similar)';
+            }
+            return getParameter(parameter);
+        };
+    """)
 
 # ==========================================
 # 🔧 CONFIG & HELPERS
@@ -39,8 +73,9 @@ BROWSER_ARGS = [
     "--disable-dev-shm-usage",
     "--disable-gpu",
     "--disable-extensions",
-    "--single-process",
-    "--disable-gl-drawing"
+    "--single-process", 
+    "--disable-gl-drawing",
+    "--window-size=1920,1080" # Help look like a real monitor
 ]
 
 HEADLESS = True 
@@ -118,8 +153,6 @@ def clean_product_name(name: str, price: float) -> str:
 # 🚀 RAM-SAFE SCRAPER (Updated)
 # ==========================================
 async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
-    # ... (Same scraper setup as before) ...
-    
     # 1. UNCOMMENT EVERYTHING
     retailers = [
         {
@@ -157,12 +190,13 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                 viewport={"width": 1024, "height": 768},
                 locale="th-TH"
             )
+            # Block heavy resources
             await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
 
             page = await context.new_page()
 
-            # ✅ USE THE ROBUST STEALTH FUNCTION
-            await stealth_async(page)
+            # ✅ APPLY ADVANCED STEALTH
+            await apply_stealth(page)
             
             try:
                 # BigC Logic
@@ -172,7 +206,7 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                     final_url = f"https://www.bigc.co.th/th/search?q={q_encoded}" if has_thai else f"https://www.bigc.co.th/en/search?q={q_encoded}"
 
                 try:
-                    await page.goto(final_url, timeout=12000, wait_until="domcontentloaded")
+                    await page.goto(final_url, timeout=15000, wait_until="domcontentloaded")
                     
                     try:
                         await page.wait_for_selector(shop["selectors"]["product_card"], timeout=5000)
