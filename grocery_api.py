@@ -7,14 +7,16 @@ import nest_asyncio
 import time
 from typing import List
 from fastapi import FastAPI, BackgroundTasks, Query
-from fastapi.middleware.cors import CORSMiddleware # <--- 1. ADD THIS IMPORT
+from fastapi.middleware.cors import CORSMiddleware # <--- IMPORANT IMPORT
 from pydantic import BaseModel
 
-# Allow nested event loops
+# Allow nested event loops (Fixes Render/Playwright issues)
 nest_asyncio.apply()
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# IMPORT MODULES
+# Ensure retailer_scraper.py and ai_matcher.py are in the same folder
 from retailer_scraper import scrape_all_retailers 
 from ai_matcher import SmartMatcher
 import database
@@ -24,21 +26,19 @@ import database
 # ==========================================
 app = FastAPI()
 
-# 2. ADD THIS MIDDLEWARE BLOCK
+# ✅ CORS FIX: This allows your Flutter App to talk to the Server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins (mobile, web, etc.)
-    allow_credentials=False,
-    allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
-    allow_headers=["*"],
+    allow_origins=["*"],     # Allows all apps
+    allow_credentials=False, # <--- MUST BE FALSE for public APIs
+    allow_methods=["*"],     # Allows POST, GET, OPTIONS
+    allow_headers=["*"],     # Allows all headers
 )
 
 # Initialize Database on Startup
 @app.on_event("startup")
 def startup_event():
     database.init_db()
-
-# ... (The rest of your code stays exactly the same)
 
 class CompareRequest(BaseModel):
     items: List[str]
@@ -94,22 +94,22 @@ def best_per_retailer(item: str, deals: List[dict]) -> List[dict]:
 # ==========================================
 async def update_cache_background(item: str):
     print(f"👷 BACKGROUND: Updating cache for '{item}'...")
-    raw_data = await scrape_all_retailers(item)
-    
-    # Process AI Logic here before saving
-    if raw_data:
-        try:
+    try:
+        raw_data = await scrape_all_retailers(item)
+        
+        # Process AI Logic here before saving
+        if raw_data:
             df = pd.DataFrame(raw_data)
             candidates = json.loads(df.to_json(orient="records"))
             engine = SmartMatcher(candidates)
-            matches = engine.find_matches(item, threshold=0.42)
+            matches = engine.find_matches(item, threshold=0.25) # Lower threshold for simple matcher
             final_best = best_per_retailer(item, matches[:30])
             
             # Save processed results to DB
             database.save_to_cache(item, final_best)
             print(f"✅ BACKGROUND: Saved {len(final_best)} deals for '{item}'")
-        except Exception as e:
-            print(f"❌ BACKGROUND ERROR: {e}")
+    except Exception as e:
+        print(f"❌ BACKGROUND ERROR: {e}")
 
 # ==========================================
 # 🔌 API ENDPOINTS (FIXED)
@@ -125,7 +125,6 @@ def home():
 async def get_deals(refresh: bool = False, query: str = Query(None)):
     """
     Returns a dummy list of deals so the Deals page loads.
-    You can implement real daily deals scraping here later.
     """
     return [
         {
@@ -145,7 +144,6 @@ async def get_deals(refresh: bool = False, query: str = Query(None)):
 async def prime_cache(req: CompareRequest, background_tasks: BackgroundTasks):
     """
     Manually trigger background scraping for a list of items.
-    Usage: Call this with ["Pork", "Rice", "Oil"] to pre-load DB.
     """
     for item in req.items:
         background_tasks.add_task(update_cache_background, item)
@@ -176,10 +174,14 @@ async def compare_prices(req: CompareRequest, background_tasks: BackgroundTasks)
             # AI Match
             matches = []
             if raw_data:
-                df = pd.DataFrame(raw_data)
-                candidates = json.loads(df.to_json(orient="records"))
-                engine = SmartMatcher(candidates)
-                matches = engine.find_matches(clean_item, threshold=0.42)
+                try:
+                    df = pd.DataFrame(raw_data)
+                    candidates = json.loads(df.to_json(orient="records"))
+                    engine = SmartMatcher(candidates)
+                    matches = engine.find_matches(clean_item, threshold=0.25)
+                except Exception as e:
+                    print(f"⚠️ AI Match Error: {e}")
+                    matches = [] # Fail gracefully if AI crashes
             
             # Group Best
             best_deals = best_per_retailer(clean_item, matches[:30])
