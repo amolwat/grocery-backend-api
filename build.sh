@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -o errexit
 
-pip install --upgrade pip
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-# ✅ IMPORTANT
+# Install Playwright browser
 python -m playwright install chromium

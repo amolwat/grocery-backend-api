@@ -4,5 +4,6 @@ pandas
 sentence-transformers
 torch
 playwright==1.42.0
+greenlet==3.0.3
 nest_asyncio
 beautifulsoup4
