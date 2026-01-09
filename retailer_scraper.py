@@ -12,7 +12,6 @@ from bs4 import BeautifulSoup
 # ==========================================
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# "Headful" Args to look like a real user
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
@@ -37,7 +36,6 @@ def clean_text(text: str) -> str:
 def extract_price(text: str) -> float:
     if not text: return 0.0
     t = text.replace(",", "").strip()
-    # Lotus often formats prices simply, but we keep robust regex
     m = re.search(r"(?:฿|บาท|THB)?\s*(\d+(?:\.\d{1,2})?)", t, flags=re.I)
     if m: return float(m.group(1))
     return 0.0
@@ -95,15 +93,13 @@ def clean_product_name(name: str, price: float) -> str:
     return x[:120].strip()
 
 # ==========================================
-# 🚀 RAM-SAFE SCRAPER (Lotus's Edition)
+# 🚀 RAM-SAFE SCRAPER (Debug Edition)
 # ==========================================
 async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     retailers = [
-        # ✅ SWAPPED BIGC FOR LOTUS'S
         {
             "name": "Lotus's",
             "url_template": "https://www.lotuss.com/en/search/{q}",
-            # Lotus uses specific classes. These selectors target the product cards.
             "selectors": {
                 "product_card": 'div[class*="product-item"], div[class*="product-card"]', 
                 "name": 'h6[class*="product-name"], a[class*="product-name"], div[class*="name"]', 
@@ -113,7 +109,12 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
         {
             "name": "Tops",
             "url_template": "https://www.tops.co.th/en/search/{q}",
-            "selectors": {"product_card": ".product-item-info", "name": ".product-item-link", "price": ".price"}
+            # Updated Tops Selectors
+            "selectors": {
+                "product_card": "div.product-item", 
+                "name": ".product-item-link, .product-name", 
+                "price": ".price, .special-price .price"
+            }
         },
         {
             "name": "Makro",
@@ -130,10 +131,7 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     print(f"🚀 RAM-SAFE Scrape Started: {q_raw}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=HEADLESS, 
-            args=BROWSER_ARGS
-        )
+        browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
         
         for shop in retailers:
             print(f"🛒 Scraping {shop['name']}...")
@@ -146,35 +144,32 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                 java_script_enabled=True
             )
             
-            # Lotus & Tops friendly headers
             await context.set_extra_http_headers({
                 "Accept-Language": "en-US,en;q=0.9,th;q=0.8",
                 "Referer": "https://www.google.com/",
                 "Upgrade-Insecure-Requests": "1"
             })
 
-            # Block heavy resources to speed up loading
+            # Block heavy resources
             await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font"] else route.continue_())
 
             page = await context.new_page()
-
-            # Inject "webdriver" removal script (Good for Lotus too)
-            await page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            """)
+            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
             
             try:
                 final_url = shop["url_template"].format(q=q_encoded)
-                
-                # Lotus logic: Ensure /th/ for Thai queries if needed, but /en/ works generally
                 if shop["name"] == "Lotus's":
-                     # Lotus URLs use %20 for spaces
                     final_url = f"https://www.lotuss.com/en/search/{quote(q_raw)}"
 
-                # Timeout logic
                 try:
-                    await page.goto(final_url, timeout=15000, wait_until="domcontentloaded")
+                    await page.goto(final_url, timeout=20000, wait_until="domcontentloaded")
                     
+                    # ⚠️ DEBUG: FORCE WAIT & PRINT TITLE
+                    # This lets us see if we are blocked ("Just a moment...") or just loading slow
+                    await page.wait_for_timeout(5000) 
+                    title = await page.title()
+                    print(f"   📄 Page Title: {title}") 
+
                     try:
                         await page.wait_for_selector(shop["selectors"]["product_card"], timeout=5000)
                     except:
@@ -183,6 +178,8 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                     content = await page.content()
                     soup = BeautifulSoup(content, "html.parser")
                     cards = soup.select(shop["selectors"]["product_card"])
+                    
+                    print(f"   🔍 Found {len(cards)} cards on page.") # Debug print
 
                     count = 0
                     for card in cards:
@@ -192,7 +189,6 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                             if not name_el: continue
                             
                             raw_name = clean_text(name_el.get_text(" "))
-                            # Lotus sometimes puts price in a weird format, but extract_price handles numbers well
                             card_text = clean_text(card.get_text(" "))
                             price = extract_price(card_text)
                             
