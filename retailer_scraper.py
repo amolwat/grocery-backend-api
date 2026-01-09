@@ -10,10 +10,9 @@ from bs4 import BeautifulSoup
 # ==========================================
 # 🔧 CONFIG & HELPERS
 # ==========================================
-# Use a Single, Modern User-Agent (Less suspicious than random rotation on a single IP)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# Aggressive "Anti-Bot" Arguments
+# "Headful" Args to look like a real user
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
@@ -26,7 +25,7 @@ BROWSER_ARGS = [
     "--hide-scrollbars",
     "--mute-audio",
     "--ignore-certificate-errors",
-    "--window-size=1920,1080" # Force a standard desktop resolution
+    "--window-size=1920,1080"
 ]
 
 HEADLESS = True 
@@ -38,15 +37,10 @@ def clean_text(text: str) -> str:
 def extract_price(text: str) -> float:
     if not text: return 0.0
     t = text.replace(",", "").strip()
-    promo_patterns = [r"(?:promo|promotion|special|ลดเหลือ|เหลือเพียง)\s*฿?\s*(\d+(?:\.\d+)?)", r"฿\s*(\d+(?:\.\d+)?)\s*(?:from|แทน)"]
-    for p in promo_patterns:
-        m = re.search(p, t, flags=re.I)
-        if m: return float(m.group(1))
-    m = re.search(r"(?:฿|บาท|THB)\s*(\d+(?:\.\d{1,2})?)", t, flags=re.I)
+    # Lotus often formats prices simply, but we keep robust regex
+    m = re.search(r"(?:฿|บาท|THB)?\s*(\d+(?:\.\d{1,2})?)", t, flags=re.I)
     if m: return float(m.group(1))
-    nums = [float(n) for n in re.findall(r"\d+(?:\.\d{1,2})?", t)]
-    nums = [n for n in nums if n >= 5] 
-    return min(nums) if nums else 0.0
+    return 0.0
 
 def extract_egg_quantity(text: str) -> float:
     s = text.lower().replace(" ", "")
@@ -101,14 +95,20 @@ def clean_product_name(name: str, price: float) -> str:
     return x[:120].strip()
 
 # ==========================================
-# 🚀 RAM-SAFE SCRAPER (Updated)
+# 🚀 RAM-SAFE SCRAPER (Lotus's Edition)
 # ==========================================
 async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     retailers = [
+        # ✅ SWAPPED BIGC FOR LOTUS'S
         {
-            "name": "BigC",
-            "url_template": "https://www.bigc.co.th/en/search?q={q}",
-            "selectors": {"product_card": 'div.productItem, div[data-testid="product-card"]', "name": ".product-name", "price": ".product-price"}
+            "name": "Lotus's",
+            "url_template": "https://www.lotuss.com/en/search/{q}",
+            # Lotus uses specific classes. These selectors target the product cards.
+            "selectors": {
+                "product_card": 'div[class*="product-item"], div[class*="product-card"]', 
+                "name": 'h6[class*="product-name"], a[class*="product-name"], div[class*="name"]', 
+                "price": 'span[class*="price-final"], div[class*="price"]'
+            }
         },
         {
             "name": "Tops",
@@ -138,7 +138,6 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
         for shop in retailers:
             print(f"🛒 Scraping {shop['name']}...")
             
-            # Use 'ignore_https_errors' to prevent handshake failures
             context = await browser.new_context(
                 user_agent=USER_AGENT,
                 viewport={"width": 1920, "height": 1080},
@@ -147,40 +146,38 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                 java_script_enabled=True
             )
             
-            # IMPORTANT: Add Extra HTTP Headers to look like a real browser
+            # Lotus & Tops friendly headers
             await context.set_extra_http_headers({
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9,th;q=0.8",
                 "Referer": "https://www.google.com/",
                 "Upgrade-Insecure-Requests": "1"
             })
 
-            # Block heavy resources only (allow scripts!)
+            # Block heavy resources to speed up loading
             await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font"] else route.continue_())
 
             page = await context.new_page()
 
-            # Inject "webdriver" removal script
+            # Inject "webdriver" removal script (Good for Lotus too)
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             """)
             
             try:
-                # BigC Logic
                 final_url = shop["url_template"].format(q=q_encoded)
-                if shop["name"] == "BigC":
-                    has_thai = any("\u0E00" <= ch <= "\u0E7F" for ch in q_raw)
-                    final_url = f"https://www.bigc.co.th/th/search?q={q_encoded}" if has_thai else f"https://www.bigc.co.th/en/search?q={q_encoded}"
+                
+                # Lotus logic: Ensure /th/ for Thai queries if needed, but /en/ works generally
+                if shop["name"] == "Lotus's":
+                     # Lotus URLs use %20 for spaces
+                    final_url = f"https://www.lotuss.com/en/search/{quote(q_raw)}"
 
-                # Increased Timeout for Cloudflare Challenges
+                # Timeout logic
                 try:
-                    await page.goto(final_url, timeout=20000, wait_until="domcontentloaded")
+                    await page.goto(final_url, timeout=15000, wait_until="domcontentloaded")
                     
-                    # Wait for selector (if it fails, page probably didn't load right)
                     try:
-                        await page.wait_for_selector(shop["selectors"]["product_card"], timeout=8000)
+                        await page.wait_for_selector(shop["selectors"]["product_card"], timeout=5000)
                     except:
-                        # Fallback: Just dump HTML and try to parse anyway
                         pass
 
                     content = await page.content()
@@ -195,6 +192,7 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                             if not name_el: continue
                             
                             raw_name = clean_text(name_el.get_text(" "))
+                            # Lotus sometimes puts price in a weird format, but extract_price handles numbers well
                             card_text = clean_text(card.get_text(" "))
                             price = extract_price(card_text)
                             
