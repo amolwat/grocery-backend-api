@@ -1,51 +1,50 @@
 import asyncio
 import random
 import re
+import gc # Garbage Collector
 from typing import List, Dict, Any
 from urllib.parse import quote
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
 # ==========================================
-# 🔧 CONFIG & HELPERS (Keep your existing logic)
+# 🔧 CONFIG & HELPERS
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 ]
 
+# Optimize Browser Args for Low Memory
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
     "--disable-infobars",
-    "--ignore-certificate-errors",
     "--disable-dev-shm-usage",
-    "--disable-gl-drawing" # Added for Render speed
+    "--disable-gpu",
+    "--disable-extensions",
+    "--single-process", # Helps on low-RAM envs
+    "--disable-gl-drawing"
 ]
 
 HEADLESS = True 
 
+# --- KEEP YOUR HELPER FUNCTIONS (clean_text, extract_price, etc.) ---
+# (Paste your existing helper functions here: clean_text, extract_price, 
+# extract_egg_quantity, normalize_unit_data, clean_product_name)
+# I will not repeat them to save space, but DO NOT DELETE THEM!
 def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip() if text else ""
 
 def extract_price(text: str) -> float:
     if not text: return 0.0
     t = text.replace(",", "").strip()
-    
-    # Promo Price First
-    promo_patterns = [
-        r"(?:promo|promotion|special|ลดเหลือ|เหลือเพียง)\s*฿?\s*(\d+(?:\.\d+)?)",
-        r"฿\s*(\d+(?:\.\d+)?)\s*(?:from|แทน)",
-    ]
+    promo_patterns = [r"(?:promo|promotion|special|ลดเหลือ|เหลือเพียง)\s*฿?\s*(\d+(?:\.\d+)?)", r"฿\s*(\d+(?:\.\d+)?)\s*(?:from|แทน)"]
     for p in promo_patterns:
         m = re.search(p, t, flags=re.I)
         if m: return float(m.group(1))
-
-    # Standard Price
     m = re.search(r"(?:฿|บาท|THB)\s*(\d+(?:\.\d{1,2})?)", t, flags=re.I)
     if m: return float(m.group(1))
-
-    # Fallback
     nums = [float(n) for n in re.findall(r"\d+(?:\.\d{1,2})?", t)]
     nums = [n for n in nums if n >= 5] 
     return min(nums) if nums else 0.0
@@ -59,60 +58,34 @@ def extract_egg_quantity(text: str) -> float:
     return 1.0
 
 def normalize_unit_data(name: str, raw_qty: str, price: float):
-    # (Your exact logic preserved here)
     s = raw_qty.lower()
     s = re.sub(r"\b(\d+)\s+\1\b", r"\1", s)
     s = s.replace(" ", "")
     name_lower = name.lower()
-
     if "egg" in name_lower or "ไข่" in name_lower:
         qty = extract_egg_quantity(name + " " + s)
         return qty, "egg", round(price / qty, 2) if qty > 0 else price
-
     unit_regex = r"(kg|kgs|kilo|g|gm|ml|l|liter|pack|packs|pcs|piece|pieces|ขวด|แพ็ค|แพค|ชิ้น|กระป๋อง|กล่อง|กรัม|ก\.|กิโลกรัม|กิโล|กก\.?|ก\.ก\.?|มล\.?|ลิตร|ล\.?)"
-    qty = 1.0
-    unit = "pcs"
-
+    qty = 1.0; unit = "pcs"
     m1 = re.search(rf"(\d+(?:\.\d+)?)[x\*](\d+(?:\.\d+)?){unit_regex}", s)
     m2 = re.search(rf"(\d+(?:\.\d+)?){unit_regex}[x\*](\d+(?:\.\d+)?)", s)
     m3 = re.search(rf"(\d+(?:\.\d+)?){unit_regex}", s)
-
-    if m1: 
-        qty = float(m1.group(1)) * float(m1.group(2))
-        unit = m1.group(3)
-    elif m2:
-        qty = float(m2.group(1)) * float(m2.group(3))
-        unit = m2.group(2)
-    elif m3:
-        qty = float(m3.group(1))
-        unit = m3.group(2)
-
-    final_qty = qty
-    final_unit = "pcs"
-
-    if unit in ["g", "gm", "กรัม", "ก."]: 
-        final_qty = qty / 1000.0
-        final_unit = "kg"
-    elif unit in ["ml", "มล."]: 
-        final_qty = qty / 1000.0
-        final_unit = "L"
+    if m1: qty = float(m1.group(1)) * float(m1.group(2)); unit = m1.group(3)
+    elif m2: qty = float(m2.group(1)) * float(m2.group(3)); unit = m2.group(2)
+    elif m3: qty = float(m3.group(1)); unit = m3.group(2)
+    final_qty = qty; final_unit = "pcs"
+    if unit in ["g", "gm", "กรัม", "ก."]: final_qty = qty / 1000.0; final_unit = "kg"
+    elif unit in ["ml", "มล."]: final_qty = qty / 1000.0; final_unit = "L"
     elif any(u in unit for u in ["kg", "kilo", "กิโล", "กก", "l", "liter", "ลิตร", "ล."]):
         final_qty = qty
-        if any(u in unit for u in ["l", "liter", "ลิตร", "ล."]):
-            final_unit = "L"
-        else:
-            final_unit = "kg"
-    
+        if any(u in unit for u in ["l", "liter", "ลิตร", "ล."]): final_unit = "L"
+        else: final_unit = "kg"
     if final_unit == "pcs":
         is_fresh_food = any(w in name_lower for w in ["pork", "chicken", "salmon", "fish", "meat", "beef", "หมู", "ไก่", "ปลา", "เนื้อ", "แซลมอน"])
         has_kg_keyword = any(w in name_lower for w in ["kg", "kilo", "กก", "กิโล", "/kg", "ต่อกก"])
-        if is_fresh_food and has_kg_keyword:
-            final_unit = "kg"
-            final_qty = 1.0
-
+        if is_fresh_food and has_kg_keyword: final_unit = "kg"; final_qty = 1.0
     if final_qty <= 0: final_qty = 1.0
-    u_price = round(price / final_qty, 2)
-    return final_qty, final_unit, u_price
+    return final_qty, final_unit, round(price / final_qty, 2)
 
 def clean_product_name(name: str, price: float) -> str:
     if not name: return ""
@@ -129,13 +102,13 @@ def clean_product_name(name: str, price: float) -> str:
     return x[:120].strip()
 
 # ==========================================
-# 🚀 NEW: FAST SINGLE BROWSER SCRAPER
+# 🚀 RAM-SAFE SCRAPER (The Fix)
 # ==========================================
 async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     """
-    Scrapes BigC, Tops, and Makro in ONE browser session.
+    Scrapes retailers sequentially, cleaning RAM after each one.
     """
-    # 1. Store Configs
+    # 1. UNCOMMENT EVERYTHING
     retailers = [
         {
             "name": "BigC",
@@ -159,49 +132,50 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
     if not q_raw: return []
     q_encoded = quote(q_raw, safe="")
 
-    print(f"🚀 Starting Batch Scrape for: {q_raw}")
+    print(f"🚀 RAM-SAFE Scrape Started: {q_raw}")
 
     async with async_playwright() as p:
-        # Launch once
+        # Launch Browser ONCE
         browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
         
-        # Shared Context (Block Images Globally)
-        context = await browser.new_context(
-            user_agent=random.choice(USER_AGENTS),
-            viewport={"width": 1366, "height": 768},
-            locale="th-TH"
-        )
-        await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font"] else route.continue_())
-
         for shop in retailers:
+            print(f"🛒 Scraping {shop['name']}...")
+            
+            # --- CRITICAL: New Context for EACH Shop ---
+            # This isolates the memory. When we close it, RAM is freed.
+            context = await browser.new_context(
+                user_agent=random.choice(USER_AGENTS),
+                viewport={"width": 1024, "height": 768}, # Smaller screen saves RAM
+                locale="th-TH"
+            )
+            # Block images aggressively
+            await context.route("**/*", lambda route, request: route.abort() if request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
+
+            page = await context.new_page()
+            
             try:
-                # Handle BigC Thai URL logic
+                # BigC Logic
                 final_url = shop["url_template"].format(q=q_encoded)
                 if shop["name"] == "BigC":
                     has_thai = any("\u0E00" <= ch <= "\u0E7F" for ch in q_raw)
                     final_url = f"https://www.bigc.co.th/th/search?q={q_encoded}" if has_thai else f"https://www.bigc.co.th/en/search?q={q_encoded}"
 
-                print(f"🛒 Scraping {shop['name']}...")
-                page = await context.new_page()
-                
+                # Strict Timeout (12s max) - If it hangs, kill it to save the server
                 try:
-                    await page.goto(final_url, timeout=15000, wait_until="domcontentloaded")
+                    await page.goto(final_url, timeout=12000, wait_until="domcontentloaded")
                     
-                    # Wait for items
                     try:
                         await page.wait_for_selector(shop["selectors"]["product_card"], timeout=5000)
                     except:
-                        # If timeout, try reading page anyway, might be there
-                        pass
+                        pass # Continue even if timeout, maybe content loaded
 
-                    # Extract via Soup (Fast & Safe)
                     content = await page.content()
                     soup = BeautifulSoup(content, "html.parser")
                     cards = soup.select(shop["selectors"]["product_card"])
 
                     count = 0
                     for card in cards:
-                        if count >= 12: break # Limit items for speed
+                        if count >= 8: break # Lower limit to 8 items per store
                         try:
                             name_el = card.select_one(shop["selectors"]["name"])
                             if not name_el: continue
@@ -219,7 +193,7 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                                 "WINNER": shop["name"],
                                 "Product Name": final_name,
                                 "Product Type": "",
-                                "Quantity": card_text[:50], # Just for debug
+                                "Quantity": card_text[:50],
                                 "BaseQty": qty,
                                 "BaseUnit": unit,
                                 "Price": price,
@@ -229,18 +203,20 @@ async def scrape_all_retailers(query: str) -> List[Dict[str, Any]]:
                         except: continue
 
                 except Exception as e:
-                    print(f"   ❌ Error on {shop['name']}: {e}")
-                
-                await page.close() # Free RAM immediately
-                
-            except Exception as e:
-                print(f"Critical {shop['name']} Error: {e}")
+                    print(f"   ⚠️ {shop['name']} Timeout/Error: {e}")
 
+            except Exception as e:
+                print(f"   ❌ Critical {shop['name']}: {e}")
+            
+            finally:
+                # --- CRITICAL: CLOSE EVERYTHING IMMEDIATELY ---
+                await page.close()
+                await context.close()
+                gc.collect() # Force Python to clean RAM
+        
         await browser.close()
     
     print(f"✅ Batch Scrape Complete. Found {len(all_results)} items.")
     return all_results
 
-# Wrapper for legacy compatibility (not used by main anymore but good to keep)
-def find_best_deals(df):
-    return df
+def find_best_deals(df): return df

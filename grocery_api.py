@@ -7,15 +7,14 @@ import nest_asyncio
 import time
 from typing import List
 from fastapi import FastAPI, BackgroundTasks, Query
+from fastapi.middleware.cors import CORSMiddleware # <--- 1. ADD THIS IMPORT
 from pydantic import BaseModel
 
-# Allow nested event loops (Fixes Render/Playwright issues)
+# Allow nested event loops
 nest_asyncio.apply()
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-# IMPORT MODULES
-# Ensure retailer_scraper.py and ai_matcher.py are in the same folder
 from retailer_scraper import scrape_all_retailers 
 from ai_matcher import SmartMatcher
 import database
@@ -25,10 +24,21 @@ import database
 # ==========================================
 app = FastAPI()
 
+# 2. ADD THIS MIDDLEWARE BLOCK
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (mobile, web, etc.)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
+    allow_headers=["*"],
+)
+
 # Initialize Database on Startup
 @app.on_event("startup")
 def startup_event():
     database.init_db()
+
+# ... (The rest of your code stays exactly the same)
 
 class CompareRequest(BaseModel):
     items: List[str]
